@@ -8,8 +8,8 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from openpyxl import Workbook
 
 # === 🔧 Налаштування ===
-TOKEN = "8302597683:AAHTLiRYSjxUrusZZds-IpWsOfdQUJKJ-ZU"
-ADMIN_ID = 629334890  # ← заміни на свій Telegram ID
+os.getenv('TOKEN')
+os.getenv('ADMIN_ID')
 
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
