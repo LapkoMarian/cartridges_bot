@@ -76,6 +76,73 @@ async def add_cartridge(callback: types.CallbackQuery):
     conn.close()
 
     await callback.message.answer("✅ Картридж додано.", reply_markup=main_menu())
+# === 👁️ Перегляд партій (мобільний формат) ===
+async def view_all(message: types.Message):
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT b.id, b.created_at, COUNT(c.id)
+        FROM batches b
+        LEFT JOIN cartridges c ON b.id = c.batch_id
+        GROUP BY b.id ORDER BY b.id
+    """)
+    batches = cur.fetchall()
+    conn.close()
+
+    if not batches:
+        await message.answer("📦 Партій ще немає.")
+        return await show_main_menu(message)
+
+    text = "📦 *Список партій:*\n\n"
+    for b in batches:
+        text += (
+            f"🗂️ *Партія {b[0]}*\n"
+            f"📅 Створена: {b[1]}\n"
+            f"🖨️ Картриджів: {b[2]}\n"
+            f"───────────────\n"
+        )
+
+    kb = InlineKeyboardBuilder()
+    for b in batches:
+        kb.button(text=f"📋 Партія {b[0]}", callback_data=f"batch_{b[0]}")
+    kb.button(text="🏠 Головне меню", callback_data="menu_home")
+    kb.adjust(1)
+
+    await message.answer(text, parse_mode="Markdown", reply_markup=kb.as_markup())
+
+
+@dp.callback_query(F.data.startswith("batch_"))
+async def show_batch(callback: types.CallbackQuery):
+    batch_id = int(callback.data.split("_")[1])
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT id, date_received, department, status, date_sent, date_returned, date_given
+        FROM cartridges WHERE batch_id=? ORDER BY id
+    """, (batch_id,))
+    rows = cur.fetchall()
+    conn.close()
+
+    if not rows:
+        await callback.message.edit_text(f"📭 У партії {batch_id} немає картриджів.")
+        return
+
+    text = f"📋 *Партія {batch_id}:*\n\n"
+    for r in rows:
+        text += (
+            f"🖨️ *#{r[0]}* | *{r[2]}*\n"
+            f"📅 Вилучено: {r[1] or '—'}\n"
+            f"⚙️ Статус: {r[3] or '—'}\n"
+            f"🚚 Відправлено на фірму: {r[4] or '—'}\n"
+            f"📦 Готове до видачі: {r[5] or '—'}\n"
+            f"✋ Видано: {r[6] or '—'}\n"
+            f"───────────────\n"
+        )
+
+    kb = InlineKeyboardBuilder()
+    kb.button(text="⬅️ Назад до списку партій", callback_data="menu_view")
+    kb.button(text="🏠 Головне меню", callback_data="menu_home")
+    await callback.message.edit_text(text, parse_mode="Markdown", reply_markup=kb.as_markup())
 
 # === Вибір партії для зміни статусу ===
 @dp.callback_query(F.data == "menu_status")
