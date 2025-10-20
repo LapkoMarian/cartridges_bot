@@ -32,7 +32,7 @@ def current_date():
     return datetime.now().strftime("%d.%m.%Y")
 
 def ensure_database():
-    """Перевіряє базу: якщо таблиці відсутні — відновлює структуру."""
+    """Перевіряє базу: якщо таблиці відсутні або застарілі — відновлює структуру."""
     if not os.path.exists(DB_PATH):
         print("⚙️ База даних не знайдена — створюємо нову...")
         init_db()
@@ -41,16 +41,29 @@ def ensure_database():
     try:
         conn = sqlite3.connect(DB_PATH)
         cur = conn.cursor()
-        # Перевіряємо наявність обох таблиць
-        cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='cartridges'")
-        cart_exists = cur.fetchone()
-        cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='batches'")
-        batch_exists = cur.fetchone()
+
+        # Отримуємо список таблиць
+        cur.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        tables = [t[0] for t in cur.fetchall()]
+
+        # Перевіряємо структуру таблиць
+        needs_rebuild = False
+
+        if "cartridges" not in tables or "batches" not in tables:
+            needs_rebuild = True
+        else:
+            # Перевіряємо наявність стовпця status у таблиці batches
+            cur.execute("PRAGMA table_info(batches)")
+            columns = [col[1] for col in cur.fetchall()]
+            if "status" not in columns:
+                print("⚠️ Таблиця batches без колонки 'status' — потрібно оновити базу.")
+                needs_rebuild = True
+
         conn.close()
 
-        if not cart_exists or not batch_exists:
-            print("⚠️ Виявлено пошкоджену або застарілу базу — відновлюємо...")
+        if needs_rebuild:
             os.remove(DB_PATH)
+            print("🧱 Відновлення структури бази...")
             init_db()
         else:
             print("✅ База даних у нормі.")
@@ -59,13 +72,14 @@ def ensure_database():
         if os.path.exists(DB_PATH):
             os.remove(DB_PATH)
         init_db()
-        
+
+
 def init_db():
-    """Створює базу даних і всі потрібні таблиці."""
+    """Створює базу даних і таблиці."""
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
 
-    # --- таблиця картриджів ---
+    # --- Таблиця картриджів ---
     cur.execute("""
         CREATE TABLE IF NOT EXISTS cartridges (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -79,18 +93,18 @@ def init_db():
         )
     """)
 
-    # --- таблиця партій ---
+    # --- Таблиця партій ---
     cur.execute("""
         CREATE TABLE IF NOT EXISTS batches (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            created_at TEXT
+            created_at TEXT,
+            status TEXT
         )
     """)
 
     conn.commit()
     conn.close()
     print("✅ Створено базу даних і таблиці cartridges, batches.")
-
 
 
 def is_admin(uid):
