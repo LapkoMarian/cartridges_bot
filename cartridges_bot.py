@@ -31,7 +31,35 @@ def current_date():
     """Повертає поточну дату у форматі ДД.ММ.РРРР"""
     return datetime.now().strftime("%d.%m.%Y")
 
+def ensure_database():
+    """Перевіряє базу: якщо таблиці відсутні — відновлює структуру."""
+    if not os.path.exists(DB_PATH):
+        print("⚙️ База даних не знайдена — створюємо нову...")
+        init_db()
+        return
 
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cur = conn.cursor()
+        # Перевіряємо наявність обох таблиць
+        cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='cartridges'")
+        cart_exists = cur.fetchone()
+        cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='batches'")
+        batch_exists = cur.fetchone()
+        conn.close()
+
+        if not cart_exists or not batch_exists:
+            print("⚠️ Виявлено пошкоджену або застарілу базу — відновлюємо...")
+            os.remove(DB_PATH)
+            init_db()
+        else:
+            print("✅ База даних у нормі.")
+    except Exception as e:
+        print("⚠️ Помилка при перевірці бази:", e)
+        if os.path.exists(DB_PATH):
+            os.remove(DB_PATH)
+        init_db()
+        
 # === 📁 Ініціалізація бази ===
 def init_db():
     conn = sqlite3.connect(DB_PATH)
