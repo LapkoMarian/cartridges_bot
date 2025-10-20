@@ -7,13 +7,14 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiohttp import web
 import os
 
-# === Конфігурація ===
-TOKEN = os.getenv("TOKEN", "YOUR_BOT_TOKEN")
-ADMIN_ID = int(os.getenv("ADMIN_ID", "111111111"))
-DB_PATH = "cartridges.db"
+TOKEN = os.getenv("TOKEN")
+ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
+
+DB_PATH = os.path.join(os.path.dirname(__file__), "cartridges.db")
+
 
 # === 🗓️ Форматування дат ===
 def normalize_date(date_str):
