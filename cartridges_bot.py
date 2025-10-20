@@ -60,12 +60,14 @@ def ensure_database():
             os.remove(DB_PATH)
         init_db()
         
-# === 📁 Ініціалізація бази ===
 def init_db():
+    """Створює базу даних і всі потрібні таблиці."""
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
+
+    # --- таблиця картриджів ---
     cur.execute("""
-        CREATE TABLE IF NOT EXISTS cartridges(
+        CREATE TABLE IF NOT EXISTS cartridges (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             date_received TEXT,
             department TEXT,
@@ -76,18 +78,19 @@ def init_db():
             batch_id INTEGER
         )
     """)
+
+    # --- таблиця партій ---
     cur.execute("""
-        CREATE TABLE IF NOT EXISTS batches(
+        CREATE TABLE IF NOT EXISTS batches (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            created_at TEXT,
-            status TEXT
+            created_at TEXT
         )
     """)
-    cur.execute("SELECT id FROM batches WHERE status='active'")
-    if not cur.fetchone():
-        cur.execute("INSERT INTO batches (created_at, status) VALUES (?, 'active')", (current_date(),))
+
     conn.commit()
     conn.close()
+    print("✅ Створено базу даних і таблиці cartridges, batches.")
+
 
 
 def is_admin(uid):
@@ -430,6 +433,7 @@ async def main():
     await asyncio.gather(
         run_web_server(),
         dp.start_polling(bot)
+        ensure_database()
     )
 
 if __name__ == "__main__":
