@@ -31,6 +31,7 @@ def current_date():
     """Повертає поточну дату у форматі ДД.ММ.РРРР"""
     return datetime.now().strftime("%d.%m.%Y")
 
+# === ФУНКЦІЯ ПЕРЕВІРКИ/СТВОРЕННЯ БАЗИ ===
 def ensure_database():
     """Перевіряє базу: якщо таблиці відсутні або застарілі — відновлює структуру."""
     if not os.path.exists(DB_PATH):
@@ -42,17 +43,14 @@ def ensure_database():
         conn = sqlite3.connect(DB_PATH)
         cur = conn.cursor()
 
-        # Отримуємо список таблиць
         cur.execute("SELECT name FROM sqlite_master WHERE type='table'")
         tables = [t[0] for t in cur.fetchall()]
 
-        # Перевіряємо структуру таблиць
         needs_rebuild = False
 
         if "cartridges" not in tables or "batches" not in tables:
             needs_rebuild = True
         else:
-            # Перевіряємо наявність стовпця status у таблиці batches
             cur.execute("PRAGMA table_info(batches)")
             columns = [col[1] for col in cur.fetchall()]
             if "status" not in columns:
@@ -105,6 +103,7 @@ def init_db():
     conn.commit()
     conn.close()
     print("✅ Створено базу даних і таблиці cartridges, batches.")
+
 
 
 def is_admin(uid):
