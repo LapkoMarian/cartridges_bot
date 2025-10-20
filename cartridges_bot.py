@@ -432,7 +432,7 @@ async def run_web_server():
 async def main():
     await asyncio.gather(
         run_web_server(),
-        dp.start_polling(bot)
+        dp.start_polling(bot),
         ensure_database()
     )
 
