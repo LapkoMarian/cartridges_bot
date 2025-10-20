@@ -430,10 +430,10 @@ async def run_web_server():
 
 # === Запуск ===
 async def main():
+    ensure_database()
     await asyncio.gather(
         run_web_server(),
         dp.start_polling(bot),
-        ensure_database()
     )
 
 if __name__ == "__main__":
