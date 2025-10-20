@@ -1,12 +1,13 @@
 import asyncio
 import sqlite3
+import os
 from datetime import datetime
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.utils.keyboard import InlineKeyboardBuilder
-from aiohttp import web
-import os
+from openpyxl import Workbook
 
+# === 🔧 Налаштування ===
 TOKEN = os.getenv("TOKEN")
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 
@@ -31,55 +32,13 @@ def current_date():
     """Повертає поточну дату у форматі ДД.ММ.РРРР"""
     return datetime.now().strftime("%d.%m.%Y")
 
-# === ФУНКЦІЯ ПЕРЕВІРКИ/СТВОРЕННЯ БАЗИ ===
-def ensure_database():
-    """Перевіряє базу: якщо таблиці відсутні або застарілі — відновлює структуру."""
-    if not os.path.exists(DB_PATH):
-        print("⚙️ База даних не знайдена — створюємо нову...")
-        init_db()
-        return
 
-    try:
-        conn = sqlite3.connect(DB_PATH)
-        cur = conn.cursor()
-
-        cur.execute("SELECT name FROM sqlite_master WHERE type='table'")
-        tables = [t[0] for t in cur.fetchall()]
-
-        needs_rebuild = False
-
-        if "cartridges" not in tables or "batches" not in tables:
-            needs_rebuild = True
-        else:
-            cur.execute("PRAGMA table_info(batches)")
-            columns = [col[1] for col in cur.fetchall()]
-            if "status" not in columns:
-                print("⚠️ Таблиця batches без колонки 'status' — потрібно оновити базу.")
-                needs_rebuild = True
-
-        conn.close()
-
-        if needs_rebuild:
-            os.remove(DB_PATH)
-            print("🧱 Відновлення структури бази...")
-            init_db()
-        else:
-            print("✅ База даних у нормі.")
-    except Exception as e:
-        print("⚠️ Помилка при перевірці бази:", e)
-        if os.path.exists(DB_PATH):
-            os.remove(DB_PATH)
-        init_db()
-
-
+# === 📁 Ініціалізація бази ===
 def init_db():
-    """Створює базу даних і таблиці."""
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
-
-    # --- Таблиця картриджів ---
     cur.execute("""
-        CREATE TABLE IF NOT EXISTS cartridges (
+        CREATE TABLE IF NOT EXISTS cartridges(
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             date_received TEXT,
             department TEXT,
@@ -90,20 +49,18 @@ def init_db():
             batch_id INTEGER
         )
     """)
-
-    # --- Таблиця партій ---
     cur.execute("""
-        CREATE TABLE IF NOT EXISTS batches (
+        CREATE TABLE IF NOT EXISTS batches(
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             created_at TEXT,
             status TEXT
         )
     """)
-
+    cur.execute("SELECT id FROM batches WHERE status='active'")
+    if not cur.fetchone():
+        cur.execute("INSERT INTO batches (created_at, status) VALUES (?, 'active')", (current_date(),))
     conn.commit()
     conn.close()
-    print("✅ Створено базу даних і таблиці cartridges, batches.")
-
 
 
 def is_admin(uid):
@@ -428,26 +385,13 @@ async def export_excel(message: types.Message):
     kb.button(text="🏠 Головне меню", callback_data="menu_home")
     await message.answer(text, parse_mode="Markdown", reply_markup=kb.as_markup())
 
-# === Веб-ендпоінт для Render ===
-async def handle(request):
-    return web.Response(text="✅ Bot is alive!", content_type="text/plain")
 
-async def run_web_server():
-    app = web.Application()
-    app.router.add_get("/", handle)
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, "0.0.0.0", 10000)
-    await site.start()
-    print("🌐 Web endpoint started on port 10000")
-
-# === Запуск ===
+# === 🚀 Запуск ===
 async def main():
-    ensure_database()
-    await asyncio.gather(
-        run_web_server(),
-        dp.start_polling(bot),
-    )
+    init_db()
+    print("🤖 Бот запущено…")
+    await dp.start_polling(bot)
+
 
 if __name__ == "__main__":
     asyncio.run(main())
