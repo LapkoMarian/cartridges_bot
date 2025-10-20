@@ -8,8 +8,8 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from openpyxl import Workbook
 
 # === 🔧 Налаштування ===
-os.getenv('TOKEN')
-os.getenv('ADMIN_ID')
+TOKEN = os.getenv("TOKEN")
+ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
