@@ -1,25 +1,28 @@
 import asyncio
 import sqlite3
 import os
+import json
 from datetime import datetime
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from openpyxl import Workbook
+import gspread
+from oauth2client.service_account import ServiceAccountCredentials
+
 
 # === 🔧 Налаштування ===
 TOKEN = os.getenv("TOKEN")
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
+GSHEET_ID = os.getenv("GSHEET_ID")
+DB_PATH = os.path.join(os.path.dirname(__file__), "cartridges.db")
 
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
-DB_PATH = os.path.join(os.path.dirname(__file__), "cartridges.db")
-
 
 # === 🗓️ Форматування дат ===
 def normalize_date(date_str):
-    """Перетворює будь-який формат дати у формат ДД.ММ.РРРР"""
     for fmt in ("%d.%m.%Y", "%d.%m.%y", "%Y-%m-%d", "%d-%m-%Y", "%Y/%m/%d", "%d/%m/%Y"):
         try:
             return datetime.strptime(date_str.strip(), fmt).strftime("%d.%m.%Y")
@@ -29,7 +32,6 @@ def normalize_date(date_str):
 
 
 def current_date():
-    """Повертає поточну дату у форматі ДД.ММ.РРРР"""
     return datetime.now().strftime("%d.%m.%Y")
 
 
@@ -63,6 +65,83 @@ def init_db():
     conn.close()
 
 
+# === 🔗 Google Sheets ===
+def init_gsheets():
+    try:
+        key_data = os.getenv("GOOGLE_SERVICE_KEY")
+        if not key_data:
+            print("⚠️ GOOGLE_SERVICE_KEY не знайдено.")
+            return None
+
+        creds_dict = json.loads(key_data)
+        scope = [
+            "https://spreadsheets.google.com/feeds",
+            "https://www.googleapis.com/auth/spreadsheets",
+            "https://www.googleapis.com/auth/drive"
+        ]
+        creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
+        client = gspread.authorize(creds)
+        sheet = client.open_by_key(GSHEET_ID)
+        print("✅ Підключено до Google Sheets")
+        return sheet
+    except Exception as e:
+        print("⚠️ Помилка підключення до Google Sheets:", e)
+        return None
+
+
+def setup_gsheet_format(ws):
+    headers = [
+        "ID", "Дата вилучення", "Відділ", "Статус",
+        "Дата відправлення", "Дата повернення", "Дата видачі", "№ партії"
+    ]
+    ws.clear()
+    ws.append_row(headers)
+    ws.format("A1:H1", {
+        "backgroundColor": {"red": 0.9, "green": 0.9, "blue": 0.9},
+        "textFormat": {"bold": True},
+        "horizontalAlignment": "CENTER"
+    })
+    ws.freeze(rows=1)
+    print("🎨 Таблицю оформлено")
+
+
+def sync_to_sheets():
+    sheet = init_gsheets()
+    if sheet is None:
+        return
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT id, date_received, department, status,
+               date_sent, date_returned, date_given, batch_id
+        FROM cartridges ORDER BY id ASC
+    """)
+    rows = cur.fetchall()
+    conn.close()
+
+    try:
+        try:
+            ws = sheet.worksheet("Cartridges")
+        except gspread.WorksheetNotFound:
+            ws = sheet.add_worksheet(title="Cartridges", rows="1000", cols="8")
+            setup_gsheet_format(ws)
+
+        ws.clear()
+        headers = [
+            "ID", "Дата вилучення", "Відділ", "Статус",
+            "Дата відправлення", "Дата повернення", "Дата видачі", "№ партії"
+        ]
+        ws.append_row(headers)
+        if rows:
+            ws.append_rows(rows)
+        ws.format("A1:H1", {"textFormat": {"bold": True}, "horizontalAlignment": "CENTER"})
+        ws.freeze(rows=1)
+        print("✅ Дані синхронізовано з Google Sheets")
+    except Exception as e:
+        print("⚠️ Помилка синхронізації:", e)
+
+
+# === Службові ===
 def is_admin(uid):
     return uid == ADMIN_ID
 
@@ -121,7 +200,13 @@ async def add_cartridge(message: types.Message):
         conn = sqlite3.connect(DB_PATH)
         cur = conn.cursor()
         cur.execute("SELECT id FROM batches WHERE status='active'")
-        batch_id = cur.fetchone()[0]
+        batch = cur.fetchone()
+        if not batch:
+            cur.execute("INSERT INTO batches (created_at, status) VALUES (?, 'active')", (current_date(),))
+            conn.commit()
+            cur.execute("SELECT id FROM batches WHERE status='active'")
+            batch = cur.fetchone()
+        batch_id = batch[0]
 
         cur.execute("""
             INSERT INTO cartridges (date_received, department, status, batch_id)
@@ -130,11 +215,12 @@ async def add_cartridge(message: types.Message):
         conn.commit()
         conn.close()
 
+        sync_to_sheets()
         await msg.answer("✅ Картридж додано!")
         await show_main_menu(msg)
 
 
-# === 👁️ Перегляд партій (мобільний формат) ===
+# === 👁️ Перегляд партій ===
 async def view_all(message: types.Message):
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
@@ -153,57 +239,17 @@ async def view_all(message: types.Message):
 
     text = "📦 *Список партій:*\n\n"
     for b in batches:
-        text += (
-            f"🗂️ *Партія {b[0]}*\n"
-            f"📅 Створена: {b[1]}\n"
-            f"🖨️ Картриджів: {b[2]}\n"
-            f"───────────────\n"
-        )
+        text += f"🗂️ *Партія {b[0]}* | 📅 {b[1]} | 🖨️ {b[2]} картр.\n───────────────\n"
 
     kb = InlineKeyboardBuilder()
     for b in batches:
         kb.button(text=f"📋 Партія {b[0]}", callback_data=f"batch_{b[0]}")
     kb.button(text="🏠 Головне меню", callback_data="menu_home")
     kb.adjust(1)
-
     await message.answer(text, parse_mode="Markdown", reply_markup=kb.as_markup())
 
 
-@dp.callback_query(F.data.startswith("batch_"))
-async def show_batch(callback: types.CallbackQuery):
-    batch_id = int(callback.data.split("_")[1])
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-    cur.execute("""
-        SELECT id, date_received, department, status, date_sent, date_returned, date_given
-        FROM cartridges WHERE batch_id=? ORDER BY id
-    """, (batch_id,))
-    rows = cur.fetchall()
-    conn.close()
-
-    if not rows:
-        await callback.message.edit_text(f"📭 У партії {batch_id} немає картриджів.")
-        return
-
-    text = f"📋 *Партія {batch_id}:*\n\n"
-    for r in rows:
-        text += (
-            f"🖨️ *#{r[0]}* | *{r[2]}*\n"
-            f"📅 Вилучено: {r[1] or '—'}\n"
-            f"⚙️ Статус: {r[3] or '—'}\n"
-            f"🚚 Відправлено на фірму: {r[4] or '—'}\n"
-            f"📦 Готове до видачі: {r[5] or '—'}\n"
-            f"✋ Видано: {r[6] or '—'}\n"
-            f"───────────────\n"
-        )
-
-    kb = InlineKeyboardBuilder()
-    kb.button(text="⬅️ Назад до списку партій", callback_data="menu_view")
-    kb.button(text="🏠 Головне меню", callback_data="menu_home")
-    await callback.message.edit_text(text, parse_mode="Markdown", reply_markup=kb.as_markup())
-
-
-# === 🔧 Зміна статусу (через вибір партії) ===
+# === 🔧 Зміна статусів ===
 async def show_status_menu(message: types.Message):
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
@@ -222,10 +268,10 @@ async def show_status_menu(message: types.Message):
 
     kb = InlineKeyboardBuilder()
     for b in batches:
-        kb.button(text=f"🗂️ Партія {b[0]} ({b[2]} картр.)", callback_data=f"editbatch_{b[0]}")
+        kb.button(text=f"🗂️ Партія {b[0]} ({b[2]} шт.)", callback_data=f"editbatch_{b[0]}")
     kb.button(text="🏠 Головне меню", callback_data="menu_home")
     kb.adjust(1)
-    await message.answer("🧩 Вибери партію для зміни статусів:", reply_markup=kb.as_markup())
+    await message.answer("🔧 Вибери партію для редагування:", reply_markup=kb.as_markup())
 
 
 @dp.callback_query(F.data.startswith("editbatch_"))
@@ -241,26 +287,13 @@ async def edit_batch(callback: types.CallbackQuery):
         await callback.message.edit_text(f"📭 У партії {batch_id} немає картриджів.")
         return
 
-    text = f"🧾 *Партія {batch_id}*\n\n"
-    for r in rows:
-        text += (
-            f"🖨️ *#{r[0]}* | *{r[1]}*\n"
-            f"⚙️ Статус: {r[2]}\n"
-            f"───────────────\n"
-        )
-
     kb = InlineKeyboardBuilder()
     for r in rows:
-        kb.button(text=f"✏️ #{r[0]} {r[1]}", callback_data=f"choose_{r[0]}")
-    kb.button(text="⬅️ Назад до вибору партії", callback_data="menu_status")
+        kb.button(text=f"#{r[0]} | {r[1]} ({r[2]})", callback_data=f"choose_{r[0]}")
+    kb.button(text="⬅️ Назад", callback_data="menu_status")
     kb.button(text="🏠 Головне меню", callback_data="menu_home")
     kb.adjust(1)
-
-    await callback.message.edit_text(
-        f"{text}\n🔧 Вибери картридж для зміни статусу:",
-        parse_mode="Markdown",
-        reply_markup=kb.as_markup()
-    )
+    await callback.message.edit_text(f"🔧 Партія {batch_id} — вибери картридж:", reply_markup=kb.as_markup())
 
 
 @dp.callback_query(F.data.startswith("choose_"))
@@ -277,10 +310,7 @@ async def choose_cartridge(callback: types.CallbackQuery):
         kb.button(text=text, callback_data=f"set_{cid}_{code}")
     kb.button(text="🏠 Головне меню", callback_data="menu_home")
     kb.adjust(2)
-    await callback.message.edit_text(
-        f"🖋️ Вибери новий статус для #{cid}:",
-        reply_markup=kb.as_markup()
-    )
+    await callback.message.edit_text(f"🖋️ Вибери новий статус для #{cid}:", reply_markup=kb.as_markup())
 
 
 @dp.callback_query(F.data.startswith("set_"))
@@ -304,29 +334,18 @@ async def set_status(callback: types.CallbackQuery):
 
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
-    if field:
-        cur.execute(f"UPDATE cartridges SET status=?, {field}=? WHERE id=?",
-                    (new_status, today, cid))
-    else:
-        cur.execute("UPDATE cartridges SET status=? WHERE id=?", (new_status, cid))
+    cur.execute(f"UPDATE cartridges SET status=?, {field}=? WHERE id=?", (new_status, today, cid))
     conn.commit()
     cur.execute("SELECT department FROM cartridges WHERE id=?", (cid,))
     dept = cur.fetchone()[0]
     conn.close()
 
-    text = (
-        f"✅ *Картридж #{cid}* | *{dept}*\n"
-        f"🔁 Новий статус: {new_status}\n"
-        f"📅 Дата: {today}\n"
-        f"───────────────"
+    sync_to_sheets()
+
+    await callback.message.edit_text(
+        f"✅ *Картридж #{cid} ({dept})*\n🔁 Новий статус: {new_status}\n📅 {today}",
+        parse_mode="Markdown"
     )
-
-    kb = InlineKeyboardBuilder()
-    kb.button(text="⬅️ Назад до партії", callback_data="menu_status")
-    kb.button(text="🏠 Головне меню", callback_data="menu_home")
-    kb.adjust(2)
-
-    await callback.message.edit_text(text, parse_mode="Markdown", reply_markup=kb.as_markup())
 
 
 # === 🆕 Нова партія ===
@@ -337,59 +356,17 @@ async def new_batch(message: types.Message):
     cur.execute("INSERT INTO batches (created_at, status) VALUES (?, 'active')", (current_date(),))
     conn.commit()
     conn.close()
+
+    sync_to_sheets()
     await message.answer("📦 Створено нову партію!")
     await show_main_menu(message)
-
-
-# === 📤 Експорт у Excel (мобільне повідомлення) ===
-async def export_excel(message: types.Message):
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-    cur.execute("SELECT id, created_at FROM batches ORDER BY id")
-    batches = cur.fetchall()
-
-    if not batches:
-        await message.answer("📭 Немає даних для експорту.")
-        conn.close()
-        return await show_main_menu(message)
-
-    wb = Workbook()
-    for batch_id, created_at in batches:
-        ws = wb.create_sheet(title=f"Партія {batch_id}")
-        ws.append(["ID", "Дата вилучення", "Відділ", "Статус",
-                   "Дата відправки", "Дата повернення", "Дата видачі"])
-        cur.execute("""
-            SELECT id, date_received, department, status, date_sent, date_returned, date_given
-            FROM cartridges WHERE batch_id=? ORDER BY id
-        """, (batch_id,))
-        rows = cur.fetchall()
-        for r in rows:
-            ws.append(list(r))
-    if "Sheet" in wb.sheetnames:
-        del wb["Sheet"]
-
-    file_name = f"cartridges_export_{current_date().replace('.', '-')}.xlsx"
-    wb.save(file_name)
-    conn.close()
-
-    await bot.send_document(message.chat.id, types.FSInputFile(file_name))
-
-    text = (
-        "📤 *Експорт завершено!*\n\n"
-        f"✅ Дані збережено у файл:\n`{file_name}`\n"
-        f"📅 Дата: {current_date()}\n"
-        "───────────────"
-    )
-
-    kb = InlineKeyboardBuilder()
-    kb.button(text="🏠 Головне меню", callback_data="menu_home")
-    await message.answer(text, parse_mode="Markdown", reply_markup=kb.as_markup())
 
 
 # === 🚀 Запуск ===
 async def main():
     init_db()
     print("🤖 Бот запущено…")
+    sync_to_sheets()
     await dp.start_polling(bot)
 
 
